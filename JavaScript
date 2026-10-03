@@ -1,0 +1,805 @@
+const loadingStartedAt = performance.now();
+const STORAGE_KEY = 'constelacion-map-v1';
+const map = document.getElementById('starfield');
+const mapWorld = document.getElementById('map-world');
+const nodesLayer = document.getElementById('nodes-layer');
+const connectionsSvg = document.getElementById('connections');
+const dialog = document.getElementById('star-dialog');
+const form = document.getElementById('star-form');
+const titleInput = document.getElementById('star-title');
+const descriptionInput = document.getElementById('star-description');
+const imageInput = document.getElementById('star-image');
+const fileInput = document.getElementById('image-file');
+const preview = document.getElementById('image-preview');
+const previewImage = document.getElementById('preview-image');
+const connectionModeButton = document.getElementById('connect-mode');
+const connectionOptions = document.getElementById('connection-options');
+const connectionStyle = document.getElementById('connection-style');
+const connectionColorButtons = [...document.querySelectorAll('.connection-color')];
+const applyConnectionColorButton = document.getElementById('apply-connection-color');
+const createConnectionButton = document.getElementById('create-connection');
+const selectedCount = document.getElementById('selected-count');
+const toast = document.getElementById('toast');
+const appShell = document.querySelector('.app-shell');
+const loadingScreen = document.getElementById('loading-screen');
+const presentationButton = document.getElementById('presentation-mode');
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 3;
+const WORLD_SCALE = 10;
+const CONNECTION_COLORS = new Set(['#a9e4cd', '#f4a47c', '#73cff0', '#b7a0f6', '#f17ca7', '#f0cb69', '#5de0d0', '#a9d764', '#eaf2f0']);
+
+let stars = [];
+let connections = [];
+let selectedIds = new Set();
+let selectedConnectionIds = new Set();
+let connectionDrag = null;
+let connectMode = false;
+let isPresentationMode = false;
+let zoom = 1;
+let panX = -map.clientWidth * (WORLD_SCALE - 1) / 2;
+let panY = -map.clientHeight * (WORLD_SCALE - 1) / 2;
+let editingId = null;
+let imageData = '';
+let connectionColor = '#a9e4cd';
+let toastTimer;
+let loadingTimer;
+
+try {
+	const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+	stars = Array.isArray(saved.stars) ? saved.stars : [];
+	connections = Array.isArray(saved.connections) ? saved.connections : [];
+	if (saved.coordinateSpace !== 2 && saved.coordinateSpace !== WORLD_SCALE) {
+		stars = stars.map(star => ({ ...star, x: star.x - 50, y: star.y - 50 }));
+	}
+} catch {
+	stars = [];
+	connections = [];
+}
+
+function persist() {
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(createMapSnapshot()));
+		document.getElementById('save-status').textContent = 'Guardado en este dispositivo';
+	} catch {
+		document.getElementById('save-status').textContent = 'No se pudo guardar';
+		showToast('La imagen es demasiado grande para guardar en este navegador.');
+	}
+}
+
+function createMapSnapshot() {
+	return {
+		format: 'constelacion-map',
+		version: 1,
+		coordinateSpace: WORLD_SCALE,
+		savedAt: new Date().toISOString(),
+		stars,
+		connections
+	};
+}
+
+function saveMapFile() {
+	const content = JSON.stringify(createMapSnapshot(), null, 2);
+	const file = new Blob([content], { type: 'application/json' });
+	const url = URL.createObjectURL(file);
+	const link = document.createElement('a');
+	const date = new Date().toISOString().slice(0, 10);
+	link.href = url;
+	link.download = `constelacion-${date}.json`;
+	link.click();
+	setTimeout(() => URL.revokeObjectURL(url), 1000);
+	showToast('Copia del mapa descargada.');
+}
+
+function parseMapSnapshot(data) {
+	if (!data || data.format !== 'constelacion-map' || data.version !== 1 || !Array.isArray(data.stars) || !Array.isArray(data.connections)) {
+		throw new Error('El archivo no tiene un formato de mapa válido.');
+	}
+	if (data.coordinateSpace !== WORLD_SCALE) {
+		throw new Error('Este archivo usa una versión de coordenadas incompatible.');
+	}
+	const importedStars = data.stars.map(star => {
+		if (!star || typeof star.title !== 'string' || !star.title.trim() || !Number.isFinite(star.x) || !Number.isFinite(star.y)) {
+			throw new Error('El archivo contiene una estrella incompleta.');
+		}
+		return {
+			id: typeof star.id === 'string' ? star.id : crypto.randomUUID(),
+			title: star.title,
+			description: typeof star.description === 'string' ? star.description : '',
+			image: typeof star.image === 'string' ? star.image : '',
+			x: clamp(star.x, -494, 494),
+			y: clamp(star.y, -494, 494)
+		};
+	});
+	const starIds = new Set(importedStars.map(star => star.id));
+	const importedConnections = data.connections
+		.filter(connection => connection && Array.isArray(connection.starIds) && connection.starIds.length >= 2 && connection.starIds.every(id => starIds.has(id)))
+		.map(connection => ({
+			id: typeof connection.id === 'string' ? connection.id : crypto.randomUUID(),
+			starIds: [...connection.starIds],
+			style: connection.style === 'dotted' ? 'dotted' : 'solid',
+			color: CONNECTION_COLORS.has(connection.color) ? connection.color : '#a9e4cd',
+			bends: Array.from({ length: connection.starIds.length - 1 }, (_, index) => {
+				const bend = Array.isArray(connection.bends) ? connection.bends[index] : null;
+				return bend && Number.isFinite(bend.x) && Number.isFinite(bend.y)
+					? { x: clamp(bend.x, -494, 494), y: clamp(bend.y, -494, 494) }
+					: null;
+			})
+		}));
+	return { stars: importedStars, connections: importedConnections };
+}
+
+async function loadMapFile(file) {
+	try {
+		const parsed = parseMapSnapshot(JSON.parse(await file.text()));
+		if ((stars.length || connections.length) && !confirm('Abrir este archivo reemplazará el mapa actual. ¿Continuar?')) return;
+		stars = parsed.stars;
+		connections = parsed.connections;
+		selectedIds.clear();
+			selectedConnectionIds.clear();
+			persist();
+		render();
+		showToast('Mapa cargado correctamente.');
+	} catch (error) {
+		showToast(error instanceof SyntaxError ? 'El archivo no contiene un JSON válido.' : error.message || 'No se pudo abrir el archivo.');
+	} finally {
+		document.getElementById('open-file').value = '';
+	}
+}
+
+function showToast(message) {
+	toast.textContent = message;
+	toast.classList.add('visible');
+	clearTimeout(toastTimer);
+	toastTimer = setTimeout(() => toast.classList.remove('visible'), 2600);
+}
+
+function showLoadingScreen(duration = 1200) {
+	clearTimeout(loadingTimer);
+	loadingScreen.classList.remove('is-hidden');
+	loadingTimer = setTimeout(() => loadingScreen.classList.add('is-hidden'), duration);
+}
+
+function render() {
+	nodesLayer.replaceChildren();
+	stars.forEach((star, index) => {
+		const node = document.createElement('div');
+		node.className = `star-node${selectedIds.has(star.id) ? ' selected' : ''}`;
+		node.style.left = `${(star.x + WORLD_SCALE * 50) / WORLD_SCALE}%`;
+		node.style.top = `${(star.y + WORLD_SCALE * 50) / WORLD_SCALE}%`;
+		node.tabIndex = isPresentationMode ? -1 : 0;
+		node.setAttribute('role', isPresentationMode ? 'img' : 'button');
+		node.setAttribute('aria-label', `${star.title}${isPresentationMode ? '' : connectMode ? ', seleccionar para conectar' : ', editar'}`);
+		node.dataset.id = star.id;
+		node.style.animationDelay = `${Math.min(index * 65, 360)}ms`;
+
+		const aura = document.createElement('span');
+		aura.className = 'node-aura';
+		if (star.image) {
+			const image = document.createElement('img');
+			image.className = 'node-image';
+			image.src = star.image;
+			image.alt = '';
+			aura.append(image);
+		}
+		const core = document.createElement('span');
+		core.className = 'node-core';
+		aura.append(core);
+		const label = document.createElement('span');
+		label.className = 'node-title';
+		label.textContent = star.title;
+		const banner = document.createElement('span');
+		banner.className = 'star-banner';
+		banner.setAttribute('aria-hidden', 'true');
+		if (star.image) {
+			const bannerImage = document.createElement('img');
+			bannerImage.className = 'banner-image';
+			bannerImage.src = star.image;
+			bannerImage.alt = '';
+			banner.append(bannerImage);
+		} else {
+			const imagePlaceholder = document.createElement('span');
+			imagePlaceholder.className = 'banner-image-placeholder';
+			imagePlaceholder.textContent = '✦';
+			banner.append(imagePlaceholder);
+		}
+		const bannerContent = document.createElement('span');
+		bannerContent.className = 'banner-content';
+		const bannerTitle = document.createElement('strong');
+		bannerTitle.textContent = star.title;
+		const bannerDescription = document.createElement('span');
+		bannerDescription.textContent = star.description || 'Sin descripción';
+		bannerContent.append(bannerTitle, bannerDescription);
+		banner.append(bannerContent);
+		node.append(aura, label, banner);
+		if (isPresentationMode) {
+			const setBannerVisibility = visible => {
+				node.classList.toggle('show-banner', visible);
+				banner.style.display = visible ? 'grid' : 'none';
+			};
+			node.addEventListener('pointerenter', () => setBannerVisibility(true));
+			node.addEventListener('pointerleave', () => setBannerVisibility(false));
+			node.addEventListener('focus', () => setBannerVisibility(true));
+			node.addEventListener('blur', () => setBannerVisibility(false));
+		}
+		nodesLayer.append(node);
+		enableDragging(node, star);
+	});
+
+	drawConnections();
+	renderList();
+	const hasStars = stars.length > 0;
+	document.getElementById('map-hint').classList.toggle('hidden', hasStars);
+	document.getElementById('star-count').textContent = String(stars.length);
+	document.getElementById('map-count').textContent = `${String(stars.length).padStart(2, '0')} OBJETOS`;
+	document.getElementById('connection-summary').textContent = `${connections.length} ${connections.length === 1 ? 'conexión' : 'conexiones'} en tu universo`;
+	updateConnectControls();
+}
+
+function renderList() {
+	const list = document.getElementById('star-list');
+	list.replaceChildren();
+	document.getElementById('empty-list').hidden = stars.length > 0;
+	stars.forEach(star => {
+		const row = document.createElement('div');
+		row.className = 'list-star-row';
+		const button = document.createElement('button');
+		button.className = 'list-star';
+		button.type = 'button';
+		button.title = 'Editar estrella';
+		if (star.image) {
+			const image = document.createElement('img');
+			image.src = star.image;
+			image.alt = '';
+			button.append(image);
+		} else {
+			const orb = document.createElement('span');
+			orb.className = 'list-orb';
+			orb.textContent = '✦';
+			button.append(orb);
+		}
+		const label = document.createElement('span');
+		label.textContent = star.title;
+		button.append(label);
+		button.addEventListener('click', () => openStarDialog(star));
+		const removeButton = document.createElement('button');
+		removeButton.className = 'list-delete';
+		removeButton.type = 'button';
+		removeButton.textContent = '×';
+		removeButton.title = `Eliminar estrella ${star.title}`;
+		removeButton.setAttribute('aria-label', `Eliminar estrella ${star.title}`);
+		removeButton.addEventListener('click', () => deleteStar(star));
+		row.append(button, removeButton);
+		list.append(row);
+	});
+
+	const connectionList = document.getElementById('connection-list');
+	connectionList.replaceChildren();
+	document.getElementById('empty-connections').hidden = connections.length > 0;
+	document.getElementById('connection-count').textContent = String(connections.length);
+	connections.forEach(connection => {
+		const row = document.createElement('div');
+		row.className = 'connection-row';
+		const label = document.createElement('span');
+		label.textContent = connection.starIds
+			.map(id => stars.find(star => star.id === id)?.title)
+			.filter(Boolean)
+			.join(' · ');
+		const selectButton = document.createElement('button');
+		selectButton.className = 'connection-select';
+		selectButton.type = 'button';
+		selectButton.textContent = label.textContent;
+		selectButton.title = 'Seleccionar para cambiar el color';
+		selectButton.setAttribute('aria-label', `Seleccionar conexión ${label.textContent} para cambiar su color`);
+		selectButton.setAttribute('aria-pressed', String(selectedConnectionIds.has(connection.id)));
+		selectButton.style.setProperty('--connection-color', CONNECTION_COLORS.has(connection.color) ? connection.color : '#a9e4cd');
+		selectButton.addEventListener('click', () => {
+			if (!connectMode) {
+				connectMode = true;
+				connectionModeButton.setAttribute('aria-pressed', 'true');
+				connectionOptions.hidden = false;
+			}
+			if (selectedConnectionIds.has(connection.id)) selectedConnectionIds.delete(connection.id);
+			else selectedConnectionIds.add(connection.id);
+			render();
+		});
+		const removeButton = document.createElement('button');
+		removeButton.className = 'list-delete';
+		removeButton.type = 'button';
+		removeButton.textContent = '×';
+		removeButton.title = 'Eliminar conexión';
+		removeButton.setAttribute('aria-label', `Eliminar conexión ${label.textContent}`);
+		removeButton.addEventListener('click', () => deleteConnection(connection));
+		row.append(selectButton, removeButton);
+		connectionList.append(row);
+	});
+}
+
+function deleteStar(star) {
+	if (!confirm(`¿Eliminar la estrella «${star.title}» y sus conexiones?`)) return;
+	stars = stars.filter(item => item.id !== star.id);
+	connections = connections
+		.map(connection => {
+			const starIds = connection.starIds.filter(id => id !== star.id);
+			const bends = starIds.slice(0, -1).map((id, index) => {
+				const originalIndex = connection.starIds.indexOf(id);
+				const nextIndex = connection.starIds.indexOf(starIds[index + 1]);
+				return nextIndex === originalIndex + 1 ? connection.bends?.[originalIndex] ?? null : null;
+			});
+			return { ...connection, starIds, bends };
+		})
+		.filter(connection => connection.starIds.length >= 2);
+	selectedConnectionIds.clear();
+	selectedIds.delete(star.id);
+	persist();
+	render();
+	showLoadingScreen();
+	showToast('Estrella y conexiones asociadas eliminadas.');
+}
+
+function deleteConnection(connection) {
+	const names = connection.starIds
+		.map(id => stars.find(star => star.id === id)?.title)
+		.filter(Boolean)
+		.join(' · ');
+	if (!confirm(`¿Eliminar la conexión ${names}?`)) return;
+	connections = connections.filter(item => item.id !== connection.id);
+	selectedConnectionIds.delete(connection.id);
+	persist();
+	render();
+	showToast('Conexión eliminada.');
+}
+
+function getConnectionBend(connection, segmentIndex, start, end) {
+	const bend = connection.bends?.[segmentIndex];
+	return bend && Number.isFinite(bend.x) && Number.isFinite(bend.y)
+		? bend
+		: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+}
+
+function setConnectionBend(connection, segmentIndex, bend) {
+	if (!Array.isArray(connection.bends)) connection.bends = [];
+	while (connection.bends.length <= segmentIndex) connection.bends.push(null);
+	connection.bends[segmentIndex] = {
+		x: clamp(bend.x, -494, 494),
+		y: clamp(bend.y, -494, 494)
+	};
+}
+
+function drawConnections() {
+	const width = map.clientWidth;
+	const height = map.clientHeight;
+	connectionsSvg.setAttribute('viewBox', `0 0 ${width * WORLD_SCALE} ${height * WORLD_SCALE}`);
+	connectionsSvg.replaceChildren();
+	const handles = [];
+	connections.forEach(connection => {
+		const linkedStars = connection.starIds.map(id => stars.find(star => star.id === id)).filter(Boolean);
+		if (linkedStars.length < 2) return;
+		const toSvgPoint = point => ({
+			x: width * (point.x + WORLD_SCALE * 50) / 100,
+			y: height * (point.y + WORLD_SCALE * 50) / 100
+		});
+		const points = [toSvgPoint(linkedStars[0])];
+		for (let index = 0; index < linkedStars.length - 1; index++) {
+			const start = linkedStars[index];
+			const end = linkedStars[index + 1];
+			const bend = getConnectionBend(connection, index, start, end);
+			points.push(toSvgPoint(bend), toSvgPoint(end));
+			handles.push({ connection, segmentIndex: index, bend, start, end });
+		}
+		const path = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+		path.setAttribute('points', points.map(point => `${point.x},${point.y}`).join(' '));
+		path.setAttribute('class', `connection-path${connection.style === 'dotted' ? ' dotted' : ''}`);
+		path.style.setProperty('--connection-color', CONNECTION_COLORS.has(connection.color) ? connection.color : '#a9e4cd');
+		connectionsSvg.append(path);
+	});
+	handles.forEach(({ connection, segmentIndex, bend, start, end }) => {
+		const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		const point = { x: map.clientWidth * (bend.x + WORLD_SCALE * 50) / 100, y: map.clientHeight * (bend.y + WORLD_SCALE * 50) / 100 };
+		handle.setAttribute('cx', point.x);
+		handle.setAttribute('cy', point.y);
+		handle.setAttribute('r', '12');
+		handle.setAttribute('class', 'connection-handle');
+		handle.setAttribute('tabindex', '0');
+		handle.setAttribute('role', 'button');
+		handle.setAttribute('aria-label', `Punto para doblar la conexión entre ${start.title} y ${end.title}. Arrastra o usa las flechas.`);
+		handle.dataset.connectionId = connection.id;
+		handle.dataset.segmentIndex = String(segmentIndex);
+		handle.style.setProperty('--connection-color', CONNECTION_COLORS.has(connection.color) ? connection.color : '#a9e4cd');
+		const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+		const size = 3.5;
+		diamond.setAttribute('points', `${point.x},${point.y - size} ${point.x + size},${point.y} ${point.x},${point.y + size} ${point.x - size},${point.y}`);
+		diamond.setAttribute('class', 'connection-handle-diamond');
+		diamond.style.setProperty('--connection-color', CONNECTION_COLORS.has(connection.color) ? connection.color : '#a9e4cd');
+		connectionsSvg.append(handle, diamond);
+	});
+}
+
+connectionsSvg.addEventListener('pointerdown', event => {
+	const handle = event.target.closest?.('.connection-handle');
+	if (!handle || event.button !== 0) return;
+	event.preventDefault();
+	event.stopPropagation();
+	connectionDrag = {
+		connectionId: handle.dataset.connectionId,
+		segmentIndex: Number(handle.dataset.segmentIndex),
+		pointerId: event.pointerId
+	};
+	connectionsSvg.setPointerCapture(event.pointerId);
+});
+connectionsSvg.addEventListener('pointermove', event => {
+	if (!connectionDrag || event.pointerId !== connectionDrag.pointerId) return;
+	const matrix = connectionsSvg.getScreenCTM();
+	const viewBox = connectionsSvg.viewBox.baseVal;
+	if (!matrix || !viewBox.width || !viewBox.height) return;
+	const screenPoint = connectionsSvg.createSVGPoint();
+	screenPoint.x = event.clientX;
+	screenPoint.y = event.clientY;
+	const worldPoint = screenPoint.matrixTransform(matrix.inverse());
+	const connection = connections.find(item => item.id === connectionDrag.connectionId);
+	if (!connection) return;
+	setConnectionBend(connection, connectionDrag.segmentIndex, {
+		x: worldPoint.x / viewBox.width * WORLD_SCALE * 100 - WORLD_SCALE * 50,
+		y: worldPoint.y / viewBox.height * WORLD_SCALE * 100 - WORLD_SCALE * 50
+	});
+	drawConnections();
+});
+function finishConnectionDrag(event) {
+	if (!connectionDrag || event.pointerId !== connectionDrag.pointerId) return;
+	connectionDrag = null;
+	if (connectionsSvg.hasPointerCapture(event.pointerId)) connectionsSvg.releasePointerCapture(event.pointerId);
+	persist();
+}
+connectionsSvg.addEventListener('pointerup', finishConnectionDrag);
+connectionsSvg.addEventListener('pointercancel', finishConnectionDrag);
+connectionsSvg.addEventListener('keydown', event => {
+	const handle = event.target.closest?.('.connection-handle');
+	const movement = {
+		ArrowUp: { x: 0, y: -5 },
+		ArrowDown: { x: 0, y: 5 },
+		ArrowLeft: { x: -5, y: 0 },
+		ArrowRight: { x: 5, y: 0 }
+	}[event.key];
+	if (!handle || !movement) return;
+	event.preventDefault();
+	const connection = connections.find(item => item.id === handle.dataset.connectionId);
+	const segmentIndex = Number(handle.dataset.segmentIndex);
+	const start = stars.find(star => star.id === connection?.starIds[segmentIndex]);
+	const end = stars.find(star => star.id === connection?.starIds[segmentIndex + 1]);
+	if (!connection || !start || !end) return;
+	const current = getConnectionBend(connection, segmentIndex, start, end);
+	const step = event.shiftKey ? 20 : 5;
+	setConnectionBend(connection, segmentIndex, {
+		x: current.x + movement.x * step / 5,
+		y: current.y + movement.y * step / 5
+	});
+	drawConnections();
+	[...connectionsSvg.querySelectorAll('.connection-handle')]
+		.find(item => item.dataset.connectionId === connection.id && Number(item.dataset.segmentIndex) === segmentIndex)
+		?.focus();
+	persist();
+});
+
+function constrainPan() {
+	const width = map.clientWidth;
+	const height = map.clientHeight;
+	const minPanX = width * (1 - WORLD_SCALE * zoom);
+	const maxPanX = 0;
+	const minPanY = height * (1 - WORLD_SCALE * zoom);
+	const maxPanY = 0;
+	panX = clamp(panX, minPanX, maxPanX);
+	panY = clamp(panY, minPanY, maxPanY);
+}
+
+function updateMapView() {
+	constrainPan();
+	mapWorld.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+	document.getElementById('zoom-level').value = `${Math.round(zoom * 100)}%`;
+	document.getElementById('zoom-out').disabled = zoom <= MIN_ZOOM;
+	document.getElementById('zoom-in').disabled = zoom >= MAX_ZOOM;
+	drawConnections();
+}
+
+function setZoom(nextZoom, anchorX = map.clientWidth / 2, anchorY = map.clientHeight / 2) {
+	const updatedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+	const ratio = updatedZoom / zoom;
+	panX = anchorX - (anchorX - panX) * ratio;
+	panY = anchorY - (anchorY - panY) * ratio;
+	zoom = updatedZoom;
+	updateMapView();
+}
+
+function enableDragging(node, star) {
+	let startX = 0;
+	let startY = 0;
+	let initialX = 0;
+	let initialY = 0;
+	let moved = false;
+
+	node.addEventListener('pointerdown', event => {
+		if (isPresentationMode || event.button !== 0) return;
+		event.preventDefault();
+		startX = event.clientX;
+		startY = event.clientY;
+		initialX = star.x;
+		initialY = star.y;
+		moved = false;
+		node.setPointerCapture(event.pointerId);
+	});
+	node.addEventListener('pointermove', event => {
+		if (isPresentationMode || !node.hasPointerCapture(event.pointerId)) return;
+		const rect = map.getBoundingClientRect();
+		const dx = event.clientX - startX;
+		const dy = event.clientY - startY;
+		if (!moved && Math.hypot(dx, dy) > 5) {
+			moved = true;
+			node.classList.add('dragging');
+		}
+		if (!moved) return;
+		star.x = clamp(initialX + dx / (rect.width * zoom) * 100, -494, 494);
+		star.y = clamp(initialY + dy / (rect.height * zoom) * 100, -494, 494);
+		node.style.left = `${(star.x + WORLD_SCALE * 50) / WORLD_SCALE}%`;
+		node.style.top = `${(star.y + WORLD_SCALE * 50) / WORLD_SCALE}%`;
+		drawConnections();
+	});
+	node.addEventListener('pointerup', event => {
+		if (isPresentationMode) return;
+		if (node.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
+		node.classList.remove('dragging');
+		if (moved) {
+			persist();
+			drawConnections();
+		} else if (connectMode) {
+			if (selectedIds.has(star.id)) selectedIds.delete(star.id);
+			else selectedIds.add(star.id);
+			render();
+		} else {
+			openStarDialog(star);
+		}
+	});
+	node.addEventListener('keydown', event => {
+		if (isPresentationMode) return;
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			if (connectMode) {
+				selectedIds.has(star.id) ? selectedIds.delete(star.id) : selectedIds.add(star.id);
+				render();
+			} else openStarDialog(star);
+		}
+	});
+}
+
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function openStarDialog(star = null) {
+	editingId = star?.id ?? null;
+	imageData = star?.image || '';
+	document.getElementById('dialog-title').textContent = star ? 'Editar estrella' : 'Dale forma a tu estrella';
+	document.getElementById('save-star').innerHTML = star ? 'Guardar cambios <span aria-hidden="true">↗</span>' : 'Agregar estrella <span aria-hidden="true">↗</span>';
+	titleInput.value = star?.title || '';
+	descriptionInput.value = star?.description || '';
+	imageInput.value = star?.image && !star.image.startsWith('data:') ? star.image : '';
+	fileInput.value = '';
+	showImagePreview(imageData);
+	dialog.showModal();
+	requestAnimationFrame(() => titleInput.focus());
+}
+
+function showImagePreview(source) {
+	preview.hidden = !source;
+	previewImage.src = source || '';
+}
+
+function updateConnectControls() {
+	const count = selectedIds.size;
+	selectedCount.textContent = String(count);
+	applyConnectionColorButton.disabled = selectedConnectionIds.size === 0;
+	createConnectionButton.disabled = count < 2;
+}
+
+function setPresentationMode(active) {
+	const changed = isPresentationMode !== active;
+	isPresentationMode = active;
+	appShell.classList.toggle('presentation-mode', active);
+	presentationButton.setAttribute('aria-pressed', String(active));
+	presentationButton.title = active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa';
+	document.getElementById('presentation-label').textContent = active ? 'Salir de pantalla completa' : 'Pantalla completa';
+	if (active && changed) {
+		connectMode = false;
+		selectedIds.clear();
+		selectedConnectionIds.clear();
+		connectionModeButton.setAttribute('aria-pressed', 'false');
+		connectionOptions.hidden = true;
+	}
+	render();
+}
+
+document.getElementById('add-star').addEventListener('click', () => openStarDialog());
+document.getElementById('first-star').addEventListener('click', () => openStarDialog());
+connectionModeButton.addEventListener('click', () => {
+	connectMode = !connectMode;
+	selectedIds.clear();
+	selectedConnectionIds.clear();
+	connectionModeButton.setAttribute('aria-pressed', String(connectMode));
+	connectionOptions.hidden = !connectMode;
+	render();
+	if (connectMode) showToast('Selecciona las estrellas que quieres unir.');
+});
+connectionColorButtons.forEach(button => {
+	button.addEventListener('click', () => {
+		connectionColor = button.dataset.color;
+		connectionColorButtons.forEach(swatch => swatch.setAttribute('aria-pressed', String(swatch === button)));
+	});
+});
+applyConnectionColorButton.addEventListener('click', () => {
+	if (!selectedConnectionIds.size) return;
+	connections.forEach(connection => {
+		if (selectedConnectionIds.has(connection.id)) connection.color = connectionColor;
+	});
+	persist();
+	render();
+	showToast(`Color aplicado a ${selectedConnectionIds.size} ${selectedConnectionIds.size === 1 ? 'conexión' : 'conexiones'}.`);
+});
+document.getElementById('cancel-connection').addEventListener('click', () => {
+	selectedIds.clear();
+	selectedConnectionIds.clear();
+	render();
+});
+createConnectionButton.addEventListener('click', () => {
+	if (selectedIds.size < 2) return;
+	const starIds = [...selectedIds];
+	const duplicate = connections.some(connection => connection.starIds.length === starIds.length && starIds.every(id => connection.starIds.includes(id)));
+	if (duplicate) {
+		showToast('Estas estrellas ya tienen una conexión.');
+		return;
+	}
+	connections.push({ id: crypto.randomUUID(), starIds, style: connectionStyle.value, color: connectionColor });
+	selectedIds.clear();
+	selectedConnectionIds.clear();
+	persist();
+	render();
+	showToast('Conexión creada.');
+});
+
+imageInput.addEventListener('input', () => {
+	imageData = imageInput.value.trim();
+	showImagePreview(imageData);
+});
+fileInput.addEventListener('change', () => {
+	const file = fileInput.files?.[0];
+	if (!file) return;
+	if (!file.type.startsWith('image/')) {
+		showToast('Elige un archivo de imagen.');
+		fileInput.value = '';
+		return;
+	}
+	const reader = new FileReader();
+	reader.addEventListener('load', () => {
+		imageData = String(reader.result || '');
+		imageInput.value = '';
+		showImagePreview(imageData);
+	});
+	reader.readAsDataURL(file);
+});
+document.getElementById('remove-image').addEventListener('click', () => {
+	imageData = '';
+	imageInput.value = '';
+	fileInput.value = '';
+	showImagePreview('');
+});
+
+form.addEventListener('submit', event => {
+	event.preventDefault();
+	const title = titleInput.value.trim();
+	if (!title) return;
+	const isNewStar = !editingId;
+	if (editingId) {
+		const star = stars.find(item => item.id === editingId);
+		if (star) Object.assign(star, { title, description: descriptionInput.value.trim(), image: imageData });
+	} else {
+		stars.push({ id: crypto.randomUUID(), title, description: descriptionInput.value.trim(), image: imageData, color: '#a9e4cd', x: -24 + Math.random() * 48, y: -28 + Math.random() * 56 });
+	}
+	persist();
+	render();
+	if (isNewStar) showLoadingScreen();
+	dialog.close();
+	showToast(isNewStar ? 'Estrella agregada a tu universo.' : 'Estrella actualizada.');
+});
+document.getElementById('close-dialog').addEventListener('click', () => dialog.close());
+document.getElementById('cancel-dialog').addEventListener('click', () => dialog.close());
+dialog.addEventListener('click', event => {
+	if (event.target === dialog) dialog.close();
+});
+document.getElementById('clear-map').addEventListener('click', () => {
+	if (!stars.length && !connections.length) return;
+	if (!confirm('¿Eliminar todas las estrellas y conexiones de este mapa?')) return;
+	const hadStars = stars.length > 0;
+	stars = [];
+	connections = [];
+	selectedIds.clear();
+	selectedConnectionIds.clear();
+	persist();
+	render();
+	if (hadStars) showLoadingScreen();
+});
+document.getElementById('save-file').addEventListener('click', saveMapFile);
+document.getElementById('open-file-button').addEventListener('click', () => document.getElementById('open-file').click());
+document.getElementById('open-file').addEventListener('change', event => {
+	const file = event.target.files?.[0];
+	if (file) loadMapFile(file);
+});
+document.getElementById('zoom-in').addEventListener('click', () => setZoom(zoom * 1.2));
+document.getElementById('zoom-out').addEventListener('click', () => setZoom(zoom / 1.2));
+document.getElementById('reset-view').addEventListener('click', () => {
+	zoom = 1;
+	panX = -map.clientWidth * (WORLD_SCALE - 1) / 2;
+	panY = -map.clientHeight * (WORLD_SCALE - 1) / 2;
+	updateMapView();
+});
+let panPointerId = null;
+let panStartX = 0;
+let panStartY = 0;
+let initialPanX = 0;
+let initialPanY = 0;
+map.addEventListener('pointerdown', event => {
+	if (event.button !== 0 || event.target.closest('.star-node, .connection-handle, button, input, select, textarea, a')) return;
+	event.preventDefault();
+	panPointerId = event.pointerId;
+	panStartX = event.clientX;
+	panStartY = event.clientY;
+	initialPanX = panX;
+	initialPanY = panY;
+	map.classList.add('panning');
+	map.setPointerCapture(event.pointerId);
+});
+map.addEventListener('pointermove', event => {
+	if (event.pointerId !== panPointerId || !map.hasPointerCapture(event.pointerId)) return;
+	panX = initialPanX + event.clientX - panStartX;
+	panY = initialPanY + event.clientY - panStartY;
+	updateMapView();
+});
+function finishMapPan(event) {
+	if (event.pointerId !== panPointerId) return;
+	if (map.hasPointerCapture(event.pointerId)) map.releasePointerCapture(event.pointerId);
+	panPointerId = null;
+	map.classList.remove('panning');
+}
+map.addEventListener('pointerup', finishMapPan);
+map.addEventListener('pointercancel', finishMapPan);
+map.addEventListener('wheel', event => {
+	event.preventDefault();
+	if (event.ctrlKey) {
+		const rect = map.getBoundingClientRect();
+		setZoom(zoom * Math.exp(-event.deltaY * 0.002), event.clientX - rect.left, event.clientY - rect.top);
+	}
+}, { passive: false });
+presentationButton.addEventListener('click', async () => {
+	if (isPresentationMode) {
+		const isFullscreen = document.fullscreenElement === appShell;
+		setPresentationMode(false);
+		if (isFullscreen) {
+			try {
+				await document.exitFullscreen();
+			} catch {
+				setPresentationMode(true);
+				showToast('No se pudo salir de la pantalla completa.');
+			}
+		}
+		return;
+	}
+	if (document.fullscreenElement) await document.exitFullscreen();
+	setPresentationMode(true);
+	try {
+		await appShell.requestFullscreen();
+	} catch {
+		showToast('Modo de presentación activo.');
+	}
+});
+document.addEventListener('fullscreenchange', () => {
+	setPresentationMode(document.fullscreenElement === appShell);
+});
+window.addEventListener('resize', updateMapView);
+render();
+updateMapView();
+
+const minimumLoadingTime = 1200;
+showLoadingScreen(Math.max(0, minimumLoadingTime - (performance.now() - loadingStartedAt)));

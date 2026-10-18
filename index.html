@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="es">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="theme-color" content="#080e15">
+	<title>Constelación | Mapa estelar</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<div class="loading-screen" id="loading-screen" role="status" aria-live="polite">
+		<span class="loading-star" aria-hidden="true">✦</span>
+		<span class="loading-label">Cargando tu universo</span>
+	</div>
+	<main class="app-shell">
+		<header class="topbar">
+			<a class="brand" href="#" aria-label="Constelación, inicio">
+				<span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+				<span>constelación</span>
+			</a>
+			<div class="topbar-status"><span class="status-dot"></span><span id="save-status">Guardado en este dispositivo</span></div>
+			<button class="button button-primary" id="add-star" type="button"><span aria-hidden="true">+</span> Nueva estrella</button>
+		</header>
+
+		<section class="workspace" aria-label="Editor de constelaciones">
+			<aside class="side-panel" id="side-panel">
+				<div class="panel-heading">
+					<p class="eyebrow">TU UNIVERSO</p>
+					<h1>Mapa estelar</h1>
+					<p class="intro">Reúne tus ideas y encuentra cómo se conectan.</p>
+				</div>
+
+				<div class="tool-group">
+					<p class="section-label">HERRAMIENTAS</p>
+					<button class="tool-button" id="connect-mode" type="button" aria-pressed="false">
+						<span class="tool-icon" aria-hidden="true">⌁</span>
+						<span><strong>Conectar estrellas</strong><small>Selecciona dos o más</small></span>
+						<span class="tool-arrow" aria-hidden="true">›</span>
+					</button>
+					<div class="connection-options" id="connection-options" hidden>
+						<label for="connection-style">Estilo de conexión</label>
+						<select id="connection-style">
+							<option value="solid">Línea continua</option>
+							<option value="dotted">Línea punteada</option>
+						</select>
+						<p class="connection-color-label" id="connection-color-label">Color de conexión</p>
+						<div class="connection-colors" id="connection-colors" role="group" aria-labelledby="connection-color-label">
+							<button class="connection-color" type="button" data-color="#a9e4cd" style="--swatch-color: #a9e4cd" aria-label="Verde menta" aria-pressed="true" title="Verde menta"></button>
+							<button class="connection-color" type="button" data-color="#f4a47c" style="--swatch-color: #f4a47c" aria-label="Coral" aria-pressed="false" title="Coral"></button>
+							<button class="connection-color" type="button" data-color="#73cff0" style="--swatch-color: #73cff0" aria-label="Celeste" aria-pressed="false" title="Celeste"></button>
+							<button class="connection-color" type="button" data-color="#b7a0f6" style="--swatch-color: #b7a0f6" aria-label="Violeta" aria-pressed="false" title="Violeta"></button>
+							<button class="connection-color" type="button" data-color="#f17ca7" style="--swatch-color: #f17ca7" aria-label="Rosa" aria-pressed="false" title="Rosa"></button>
+							<button class="connection-color" type="button" data-color="#f0cb69" style="--swatch-color: #f0cb69" aria-label="Dorado" aria-pressed="false" title="Dorado"></button>
+							<button class="connection-color" type="button" data-color="#5de0d0" style="--swatch-color: #5de0d0" aria-label="Turquesa" aria-pressed="false" title="Turquesa"></button>
+							<button class="connection-color" type="button" data-color="#a9d764" style="--swatch-color: #a9d764" aria-label="Lima" aria-pressed="false" title="Lima"></button>
+							<button class="connection-color" type="button" data-color="#eaf2f0" style="--swatch-color: #eaf2f0" aria-label="Blanco estelar" aria-pressed="false" title="Blanco estelar"></button>
+						</div>
+						<button class="button button-connect apply-connection-color" id="apply-connection-color" type="button" disabled>Aplicar color a conexiones</button>
+						<button class="button button-connect" id="create-connection" type="button" disabled>Crear conexión <span id="selected-count">0</span></button>
+						<button class="text-button" id="cancel-connection" type="button">Cancelar selección</button>
+					</div>
+				</div>
+
+				<div class="star-list-section">
+					<div class="list-collection">
+						<button class="list-heading-toggle" id="toggle-star-list" type="button" aria-expanded="true" aria-controls="star-list-content">
+							<span class="section-label">ESTRELLAS</span><span class="count-pill" id="star-count">0</span><span class="list-toggle-arrow" aria-hidden="true">⌄</span>
+						</button>
+						<div class="list-content" id="star-list-content">
+							<div class="list-content-inner">
+								<div class="star-list" id="star-list"></div>
+								<p class="empty-list" id="empty-list">Tu mapa empieza con una idea.<br>Agrega tu primera estrella.</p>
+							</div>
+						</div>
+					</div>
+					<div class="connection-list-section list-collection">
+						<button class="list-heading-toggle" id="toggle-connection-list" type="button" aria-expanded="true" aria-controls="connection-list-content">
+							<span class="section-label">CONEXIONES</span><span class="count-pill" id="connection-count">0</span><span class="list-toggle-arrow" aria-hidden="true">⌄</span>
+						</button>
+						<div class="list-content" id="connection-list-content">
+							<div class="list-content-inner">
+								<div class="connection-list" id="connection-list"></div>
+								<p class="empty-connections" id="empty-connections">Todavía no hay conexiones.</p>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<div class="panel-footer"><span class="footer-orbit" aria-hidden="true">✳</span><span id="connection-summary">0 conexiones en tu universo</span></div>
+			</aside>
+
+			<section class="map-area" aria-label="Lienzo espacial">
+				<div class="map-toolbar">
+					<div class="map-caption"><span class="live-dot"></span><span>UNIVERSO PERSONAL</span></div>
+					<div class="zoom-controls" aria-label="Controles de zoom">
+						<button class="button button-quiet zoom-button" id="zoom-out" type="button" title="Alejar" aria-label="Alejar">−</button>
+						<output id="zoom-level" aria-live="polite">100%</output>
+						<button class="button button-quiet zoom-button" id="zoom-in" type="button" title="Acercar" aria-label="Acercar">+</button>
+						<button class="button button-quiet reset-zoom" id="reset-view" type="button" title="Restablecer vista" aria-label="Restablecer vista">Restablecer</button>
+					</div>
+					<div class="map-actions">
+						<button class="button button-quiet file-action" id="save-file" type="button" title="Descargar una copia del mapa">
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m-3-3 3 3 3-3M3 11.5v2h10v-2" /></svg><span>Guardar archivo</span>
+						</button>
+						<button class="button button-quiet file-action" id="open-file-button" type="button" title="Abrir un mapa guardado">
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.7H14v6.3H2zM8 10V7m-2 2 2-2 2 2" /></svg><span>Abrir archivo</span>
+						</button>
+						<input id="open-file" type="file" accept=".json,application/json" hidden>
+						<button class="button button-quiet" id="clear-map" type="button" title="Eliminar todas las estrellas y conexiones">Limpiar mapa</button>
+						<button class="button button-quiet presentation-button" id="presentation-mode" type="button" aria-pressed="false" title="Ver mapa en pantalla completa">
+							<svg class="presentation-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" /></svg>
+							<span id="presentation-label">Pantalla completa</span>
+						</button>
+					</div>
+				</div>
+				<div class="starfield" id="starfield">
+					<div class="map-world" id="map-world">
+						<div class="nebula nebula-one"></div>
+						<div class="nebula nebula-two"></div>
+						<svg class="connections" id="connections" role="group" aria-label="Conexiones del mapa"></svg>
+						<div class="map-hint" id="map-hint">
+							<span class="hint-symbol" aria-hidden="true">✦</span>
+							<strong>Un universo por descubrir</strong>
+							<span>Crea una estrella y empieza a conectar tus ideas.</span>
+							<button class="button button-outline" id="first-star" type="button">Crear primera estrella <span aria-hidden="true">↗</span></button>
+						</div>
+						<div class="nodes-layer" id="nodes-layer"></div>
+					</div>
+					<div class="map-coordinates" aria-hidden="true"><span>SECTOR 01</span><span id="map-count">0 OBJETOS</span></div>
+				</div>
+				<div class="map-legend"><span><i class="legend-star"></i> Idea</span><span><i class="legend-line"></i> Relación</span><span class="legend-tip">Arrastra las estrellas para ordenar tu mapa</span></div>
+			</section>
+		</section>
+	</main>
+
+	<dialog class="star-dialog" id="star-dialog" aria-labelledby="dialog-title">
+		<form id="star-form">
+			<div class="dialog-topline"><span class="dialog-kicker">NUEVO OBJETO CELESTE</span><button class="dialog-close" id="close-dialog" type="button" aria-label="Cerrar">×</button></div>
+			<h2 id="dialog-title">Dale forma a tu estrella</h2>
+			<p class="dialog-description">Ponle un nombre y una imagen para reconocerla en tu universo.</p>
+			<label class="field-label" for="star-title">Título <span>*</span></label>
+			<input class="text-input" id="star-title" name="title" maxlength="60" placeholder="Ej. Ideas para el proyecto" required>
+			<label class="field-label" for="star-description">Descripción <small>OPCIONAL</small></label>
+			<textarea class="text-input text-area" id="star-description" name="description" maxlength="220" rows="3" placeholder="¿Qué representa esta estrella?"></textarea>
+			<div class="image-field">
+				<label class="field-label" for="star-image">Imagen <small>OPCIONAL</small></label>
+				<div class="image-input-row"><input class="text-input" id="star-image" name="image" type="url" placeholder="https://..."><label class="upload-button" for="image-file" title="Elegir una imagen del dispositivo">＋<span>Subir</span></label><input id="image-file" type="file" accept="image/*" hidden></div>
+				<div class="image-preview" id="image-preview" hidden><img id="preview-image" alt="Vista previa de la imagen"><button type="button" id="remove-image" class="text-button">Quitar imagen</button></div>
+			</div>
+			<div class="dialog-actions"><button class="button button-quiet" id="cancel-dialog" type="button">Cancelar</button><button class="button button-primary" id="save-star" type="submit">Agregar estrella <span aria-hidden="true">↗</span></button></div>
+		</form>
+	</dialog>
+	<div class="toast" id="toast" role="status" aria-live="polite"></div>
+	<script src="JavaScript"></script>
+</body>
+</html>

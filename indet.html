@@ -23,7 +23,7 @@
 		</header>
 
 		<section class="workspace" aria-label="Editor de constelaciones">
-			<aside class="side-panel">
+			<aside class="side-panel" id="side-panel">
 				<div class="panel-heading">
 					<p class="eyebrow">TU UNIVERSO</p>
 					<h1>Mapa estelar</h1>
@@ -62,13 +62,27 @@
 				</div>
 
 				<div class="star-list-section">
-					<div class="list-heading"><p class="section-label">ESTRELLAS</p><span class="count-pill" id="star-count">0</span></div>
-					<div class="star-list" id="star-list"></div>
-					<p class="empty-list" id="empty-list">Tu mapa empieza con una idea.<br>Agrega tu primera estrella.</p>
-					<div class="connection-list-section">
-						<div class="list-heading"><p class="section-label">CONEXIONES</p><span class="count-pill" id="connection-count">0</span></div>
-						<div class="connection-list" id="connection-list"></div>
-						<p class="empty-connections" id="empty-connections">Todavía no hay conexiones.</p>
+					<div class="list-collection">
+						<button class="list-heading-toggle" id="toggle-star-list" type="button" aria-expanded="true" aria-controls="star-list-content">
+							<span class="section-label">ESTRELLAS</span><span class="count-pill" id="star-count">0</span><span class="list-toggle-arrow" aria-hidden="true">⌄</span>
+						</button>
+						<div class="list-content" id="star-list-content">
+							<div class="list-content-inner">
+								<div class="star-list" id="star-list"></div>
+								<p class="empty-list" id="empty-list">Tu mapa empieza con una idea.<br>Agrega tu primera estrella.</p>
+							</div>
+						</div>
+					</div>
+					<div class="connection-list-section list-collection">
+						<button class="list-heading-toggle" id="toggle-connection-list" type="button" aria-expanded="true" aria-controls="connection-list-content">
+							<span class="section-label">CONEXIONES</span><span class="count-pill" id="connection-count">0</span><span class="list-toggle-arrow" aria-hidden="true">⌄</span>
+						</button>
+						<div class="list-content" id="connection-list-content">
+							<div class="list-content-inner">
+								<div class="connection-list" id="connection-list"></div>
+								<p class="empty-connections" id="empty-connections">Todavía no hay conexiones.</p>
+							</div>
+						</div>
 					</div>
 				</div>
 

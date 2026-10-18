@@ -23,6 +23,8 @@ const toast = document.getElementById('toast');
 const appShell = document.querySelector('.app-shell');
 const loadingScreen = document.getElementById('loading-screen');
 const presentationButton = document.getElementById('presentation-mode');
+const starListToggle = document.getElementById('toggle-star-list');
+const connectionListToggle = document.getElementById('toggle-connection-list');
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
 const WORLD_SCALE = 10;
@@ -38,6 +40,8 @@ let isPresentationMode = false;
 let zoom = 1;
 let panX = -map.clientWidth * (WORLD_SCALE - 1) / 2;
 let panY = -map.clientHeight * (WORLD_SCALE - 1) / 2;
+let previousMapWidth = map.clientWidth;
+let previousMapHeight = map.clientHeight;
 let editingId = null;
 let imageData = '';
 let connectionColor = '#a9e4cd';
@@ -499,6 +503,18 @@ function updateMapView() {
 	drawConnections();
 }
 
+function handleMapResize() {
+	const width = map.clientWidth;
+	const height = map.clientHeight;
+	if (!width || !height) return;
+	if (width === previousMapWidth && height === previousMapHeight) return;
+	if (previousMapWidth > 0) panX *= width / previousMapWidth;
+	if (previousMapHeight > 0) panY *= height / previousMapHeight;
+	previousMapWidth = width;
+	previousMapHeight = height;
+	updateMapView();
+}
+
 function setZoom(nextZoom, anchorX = map.clientWidth / 2, anchorY = map.clientHeight / 2) {
 	const updatedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
 	const ratio = updatedZoom / zoom;
@@ -615,6 +631,13 @@ function setPresentationMode(active) {
 
 document.getElementById('add-star').addEventListener('click', () => openStarDialog());
 document.getElementById('first-star').addEventListener('click', () => openStarDialog());
+function toggleListSection(button) {
+	const expanded = button.getAttribute('aria-expanded') === 'true';
+	button.setAttribute('aria-expanded', String(!expanded));
+	document.getElementById(button.getAttribute('aria-controls')).inert = expanded;
+}
+starListToggle.addEventListener('click', () => toggleListSection(starListToggle));
+connectionListToggle.addEventListener('click', () => toggleListSection(connectionListToggle));
 connectionModeButton.addEventListener('click', () => {
 	connectMode = !connectMode;
 	selectedIds.clear();
@@ -797,7 +820,9 @@ presentationButton.addEventListener('click', async () => {
 document.addEventListener('fullscreenchange', () => {
 	setPresentationMode(document.fullscreenElement === appShell);
 });
-window.addEventListener('resize', updateMapView);
+const mapResizeObserver = new ResizeObserver(handleMapResize);
+mapResizeObserver.observe(map);
+window.addEventListener('resize', handleMapResize);
 render();
 updateMapView();
 

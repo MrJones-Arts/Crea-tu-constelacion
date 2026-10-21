@@ -82,16 +82,143 @@ function createMapSnapshot() {
 }
 
 function saveMapFile() {
-	const content = JSON.stringify(createMapSnapshot(), null, 2);
-	const file = new Blob([content], { type: 'application/json' });
+	const content = createTextMapSnapshot(createMapSnapshot());
+	const file = new Blob([content], { type: 'text/plain;charset=utf-8' });
 	const url = URL.createObjectURL(file);
 	const link = document.createElement('a');
 	const date = new Date().toISOString().slice(0, 10);
 	link.href = url;
-	link.download = `constelacion-${date}.json`;
+	link.download = `constelacion-mapa-${date}.txt`;
 	link.click();
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
-	showToast('Copia del mapa descargada.');
+	showToast('Copia del mapa descargada como archivo de texto.');
+}
+
+function escapeTextField(value) {
+	return String(value)
+		.replace(/\\/g, '\\\\')
+		.replace(/\t/g, '\\t')
+		.replace(/\r/g, '\\r')
+		.replace(/\n/g, '\\n');
+}
+
+function unescapeTextField(value) {
+	return value.replace(/\\([\\tnr])/g, (_, character) => ({
+		'\\': '\\',
+		t: '\t',
+		n: '\n',
+		r: '\r'
+	})[character]);
+}
+
+function createTextMapSnapshot(data) {
+	const lines = [
+		'# Copia de seguridad de Constelacion',
+		'# Para restaurarla, usa "Abrir archivo" en la aplicacion.',
+		'CONSTELACION-TXT\t1',
+		`COORDINATE_SPACE\t${data.coordinateSpace}`,
+		`SAVED_AT\t${escapeTextField(data.savedAt)}`
+	];
+	for (const star of data.stars) {
+		lines.push([
+			'STAR',
+			escapeTextField(star.id),
+			escapeTextField(star.title),
+			escapeTextField(star.description || ''),
+			escapeTextField(star.image || ''),
+			star.x,
+			star.y
+		].join('\t'));
+	}
+	for (const connection of data.connections) {
+		const bends = Array.from({ length: connection.starIds.length - 1 }, (_, index) => {
+			const bend = connection.bends?.[index];
+			return bend ? [bend.x, bend.y] : ['', ''];
+		}).flat();
+		lines.push([
+			'CONNECTION',
+			escapeTextField(connection.id),
+			connection.style,
+			connection.color || '#a9e4cd',
+			connection.starIds.length,
+			...connection.starIds.map(escapeTextField),
+			...bends
+		].join('\t'));
+	}
+	return `${lines.join('\n')}\n`;
+}
+
+function parseTextMapSnapshot(content) {
+	const lines = content.split(/\r?\n/).filter(line => line && !line.startsWith('#'));
+	if (lines.shift() !== 'CONSTELACION-TXT\t1') {
+		throw new Error('El archivo no tiene un formato de mapa válido.');
+	}
+	const coordinateFields = lines.shift()?.split('\t');
+	const savedAtFields = lines.shift()?.split('\t');
+	if (coordinateFields?.length !== 2 || coordinateFields[0] !== 'COORDINATE_SPACE' ||
+		savedAtFields?.length !== 2 || savedAtFields[0] !== 'SAVED_AT') {
+		throw new Error('El archivo de texto está incompleto o dañado.');
+	}
+
+	const stars = [];
+	const connections = [];
+	for (const line of lines) {
+		const fields = line.split('\t');
+		if (fields[0] === 'STAR' && fields.length === 7) {
+			const x = Number(fields[5]);
+			const y = Number(fields[6]);
+			if (!Number.isFinite(x) || !Number.isFinite(y)) {
+				throw new Error('El archivo contiene una estrella incompleta.');
+			}
+			stars.push({
+				id: unescapeTextField(fields[1]),
+				title: unescapeTextField(fields[2]),
+				description: unescapeTextField(fields[3]),
+				image: unescapeTextField(fields[4]),
+				x,
+				y
+			});
+			continue;
+		}
+		if (fields[0] === 'CONNECTION') {
+			const starCount = Number(fields[4]);
+			const expectedLength = 5 + starCount + (starCount - 1) * 2;
+			if (!Number.isInteger(starCount) || starCount < 2 || fields.length !== expectedLength) {
+				throw new Error('El archivo contiene una conexión incompleta.');
+			}
+			const bends = Array.from({ length: starCount - 1 }, (_, index) => {
+				const xField = fields[5 + starCount + index * 2];
+				const yField = fields[6 + starCount + index * 2];
+				if (xField === '' && yField === '') return null;
+				if (xField === '' || yField === '') {
+					throw new Error('El archivo contiene una conexión incompleta.');
+				}
+				const x = Number(xField);
+				const y = Number(yField);
+				if (!Number.isFinite(x) || !Number.isFinite(y)) {
+					throw new Error('El archivo contiene una conexión incompleta.');
+				}
+				return { x, y };
+			});
+			connections.push({
+				id: unescapeTextField(fields[1]),
+				style: fields[2],
+				color: fields[3],
+				starIds: fields.slice(5, 5 + starCount).map(unescapeTextField),
+				bends
+			});
+			continue;
+		}
+		throw new Error('El archivo de texto contiene datos que no se reconocen.');
+	}
+	return {
+		format: 'constelacion-map',
+		version: 1,
+		coordinateSpace: Number(coordinateFields[1]),
+		savedAt: unescapeTextField(savedAtFields[1]),
+		stars,
+		connections
+	};
 }
 
 function parseMapSnapshot(data) {
@@ -134,7 +261,11 @@ function parseMapSnapshot(data) {
 
 async function loadMapFile(file) {
 	try {
-		const parsed = parseMapSnapshot(JSON.parse(await file.text()));
+		const content = await file.text();
+		const data = content.trimStart().startsWith('{')
+			? JSON.parse(content)
+			: parseTextMapSnapshot(content);
+		const parsed = parseMapSnapshot(data);
 		if ((stars.length || connections.length) && !confirm('Abrir este archivo reemplazará el mapa actual. ¿Continuar?')) return;
 		stars = parsed.stars;
 		connections = parsed.connections;
@@ -144,7 +275,7 @@ async function loadMapFile(file) {
 		render();
 		showToast('Mapa cargado correctamente.');
 	} catch (error) {
-		showToast(error instanceof SyntaxError ? 'El archivo no contiene un JSON válido.' : error.message || 'No se pudo abrir el archivo.');
+		showToast(error instanceof SyntaxError ? 'El archivo no tiene un formato válido.' : error.message || 'No se pudo abrir el archivo.');
 	} finally {
 		document.getElementById('open-file').value = '';
 	}
